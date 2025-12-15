@@ -364,6 +364,13 @@ def auto_search_process(result_queue,
             # If there's an error, send the error info back to the parent process
             result_queue.put({'error': str(e), 'type': 'BadRequestError'})
             return
+        except Exception as e:
+            # Handle ThrottlingException and other AWS Bedrock errors
+            if 'ThrottlingException' in str(e):
+                result_queue.put({'error': str(e), 'type': 'ThrottlingException'})
+            else:
+                result_queue.put({'error': str(e), 'type': 'UnknownError'})
+            return
         
         if last_message and response.choices[0].message.content == last_message:
             messages.append({
@@ -569,8 +576,15 @@ def run_localize(rank, args, bug_queue, log_queue, output_file_lock, traj_file_l
                     
                     # loc_result, messages, traj_data = result_queue.get()
                     result = result_queue.get()
-                    if isinstance(result, dict) and 'error' in result and result['type'] == 'BadRequestError':
-                        raise litellm.BadRequestError(result['error'], args.model, args.model.split('/')[0])
+                    if isinstance(result, dict) and 'error' in result:
+                        if result['type'] == 'BadRequestError':
+                            raise litellm.BadRequestError(result['error'], args.model, args.model.split('/')[0])
+                        elif result['type'] == 'ThrottlingException':
+                            logger.warning(f"ThrottlingException: {result['error']}. Skip this instance.")
+                            break  # Skip this instance and record as failed
+                        elif result['type'] == 'UnknownError':
+                            logger.warning(f"Unknown error: {result['error']}. Skip this instance.")
+                            break  # Skip this instance and record as failed
                         # print(f"Error occurred in subprocess: {result['error']}")
                     else:
                         loc_result, messages, traj_data = result
