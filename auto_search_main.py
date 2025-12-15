@@ -76,16 +76,46 @@ def bedrock_completion(model_name, messages, temperature=1.0, tools=None):
     for msg in messages:
         if msg.get("role") == "system":
             system_message = msg.get("content", "")
-        elif msg.get("role") in ["user", "assistant"]:
+        elif msg.get("role") == "user":
             claude_messages.append({
-                "role": msg["role"],
+                "role": "user",
                 "content": msg["content"]
             })
+        elif msg.get("role") == "assistant":
+            # Handle assistant messages with potential tool calls
+            if msg.get("tool_calls"):
+                # Convert tool calls to Claude format
+                content_blocks = []
+                if msg.get("content"):
+                    content_blocks.append({
+                        "type": "text",
+                        "text": msg["content"]
+                    })
+                for tool_call in msg["tool_calls"]:
+                    content_blocks.append({
+                        "type": "tool_use",
+                        "id": tool_call["id"],
+                        "name": tool_call["function"]["name"],
+                        "input": json.loads(tool_call["function"]["arguments"])
+                    })
+                claude_messages.append({
+                    "role": "assistant",
+                    "content": content_blocks
+                })
+            else:
+                claude_messages.append({
+                    "role": "assistant",
+                    "content": msg["content"]
+                })
         elif msg.get("role") == "tool":
-            # Handle tool responses
+            # Handle tool responses in Claude format
             claude_messages.append({
-                "role": "user", 
-                "content": f"Tool result: {msg['content']}"
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": msg.get("tool_call_id", ""),
+                    "content": msg["content"]
+                }]
             })
     
     # Prepare request body
@@ -100,8 +130,18 @@ def bedrock_completion(model_name, messages, temperature=1.0, tools=None):
         request_body["system"] = system_message
     
     if tools:
-        # Convert tools to Claude format if needed
-        request_body["tools"] = tools
+        # Convert OpenAI tools format to Claude format
+        claude_tools = []
+        for tool in tools:
+            if tool.get("type") == "function" and "function" in tool:
+                func_def = tool["function"]
+                claude_tool = {
+                    "name": func_def["name"],
+                    "description": func_def.get("description", ""),
+                    "input_schema": func_def.get("parameters", {})
+                }
+                claude_tools.append(claude_tool)
+        request_body["tools"] = claude_tools
     
     try:
         response = bedrock_client.invoke_model(
@@ -115,12 +155,12 @@ def bedrock_completion(model_name, messages, temperature=1.0, tools=None):
         
         # Create response object compatible with litellm
         class BedrockResponse:
-            def __init__(self, content, usage=None):
+            def __init__(self, content, usage=None, tool_calls=None):
                 self.choices = [type('Choice', (), {
                     'message': type('Message', (), {
                         'content': content,
                         'role': 'assistant',
-                        'tool_calls': None
+                        'tool_calls': tool_calls
                     })()
                 })()]
                 self.usage = type('Usage', (), {
@@ -128,10 +168,29 @@ def bedrock_completion(model_name, messages, temperature=1.0, tools=None):
                     'completion_tokens': usage.get('output_tokens', 0) if usage else 0
                 })()
         
-        content = response_body['content'][0]['text']
         usage = response_body.get('usage', {})
         
-        return BedrockResponse(content, usage)
+        # Handle tool calls if present
+        tool_calls = None
+        content = None
+        
+        for content_block in response_body['content']:
+            if content_block['type'] == 'text':
+                content = content_block['text']
+            elif content_block['type'] == 'tool_use':
+                if tool_calls is None:
+                    tool_calls = []
+                tool_call = type('ToolCall', (), {
+                    'id': content_block['id'],
+                    'function': type('Function', (), {
+                        'name': content_block['name'],
+                        'arguments': json.dumps(content_block['input'])
+                    })(),
+                    'type': 'function'
+                })()
+                tool_calls.append(tool_call)
+        
+        return BedrockResponse(content, usage, tool_calls)
         
     except ClientError as e:
         raise Exception(f"Bedrock API error: {e}")
