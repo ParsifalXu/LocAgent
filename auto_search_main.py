@@ -38,6 +38,10 @@ from litellm import Message as LiteLLMMessage
 from openai import APITimeoutError
 from evaluation.eval_metric import filtered_instances
 
+# AWS Bedrock support
+import boto3
+from botocore.exceptions import ClientError
+
 
 from time import sleep
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
@@ -50,6 +54,87 @@ from util.runtime.fn_call_converter import (
 # litellm.set_verbose=True
 # os.environ['LITELLM_LOG'] = 'DEBUG
 
+
+# AWS Bedrock client and completion functions
+def get_bedrock_client():
+    """Initialize AWS Bedrock client"""
+    return boto3.client(
+        'bedrock-runtime',
+        region_name='ap-southeast-1',
+        # AWS credentials should be set via environment variables:
+        # AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
+    )
+
+def bedrock_completion(model_name, messages, temperature=1.0, tools=None):
+    """AWS Bedrock completion function compatible with litellm interface"""
+    bedrock_client = get_bedrock_client()
+    
+    # Convert messages to Claude format
+    claude_messages = []
+    system_message = ""
+    
+    for msg in messages:
+        if msg.get("role") == "system":
+            system_message = msg.get("content", "")
+        elif msg.get("role") in ["user", "assistant"]:
+            claude_messages.append({
+                "role": msg["role"],
+                "content": msg["content"]
+            })
+        elif msg.get("role") == "tool":
+            # Handle tool responses
+            claude_messages.append({
+                "role": "user", 
+                "content": f"Tool result: {msg['content']}"
+            })
+    
+    # Prepare request body
+    request_body = {
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 4096,
+        "temperature": temperature,
+        "messages": claude_messages
+    }
+    
+    if system_message:
+        request_body["system"] = system_message
+    
+    if tools:
+        # Convert tools to Claude format if needed
+        request_body["tools"] = tools
+    
+    try:
+        response = bedrock_client.invoke_model(
+            modelId=model_name,
+            contentType="application/json",
+            accept="application/json",
+            body=json.dumps(request_body)
+        )
+        
+        response_body = json.loads(response['body'].read())
+        
+        # Create response object compatible with litellm
+        class BedrockResponse:
+            def __init__(self, content, usage=None):
+                self.choices = [type('Choice', (), {
+                    'message': type('Message', (), {
+                        'content': content,
+                        'role': 'assistant',
+                        'tool_calls': None
+                    })()
+                })()]
+                self.usage = type('Usage', (), {
+                    'prompt_tokens': usage.get('input_tokens', 0) if usage else 0,
+                    'completion_tokens': usage.get('output_tokens', 0) if usage else 0
+                })()
+        
+        content = response_body['content'][0]['text']
+        usage = response_body.get('usage', {})
+        
+        return BedrockResponse(content, usage)
+        
+    except ClientError as e:
+        raise Exception(f"Bedrock API error: {e}")
 
 def filter_dataset(dataset, filter_column: str, used_list: str):
     file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.toml')
@@ -158,7 +243,15 @@ def auto_search_process(result_queue,
 
         try:
             # new conversation
-            if tools and ('hosted_vllm' in model_name or 'qwen' in model_name.lower()):
+            if tools and model_name == "apac.anthropic.claude-3-5-sonnet-20241022-v2:0":
+                # Use AWS Bedrock for Claude model
+                response = bedrock_completion(
+                    model_name=model_name,
+                    messages=messages,
+                    temperature=temp,
+                    tools=tools
+                )
+            elif tools and ('hosted_vllm' in model_name or 'qwen' in model_name.lower()):
                 messages = convert_fncall_messages_to_non_fncall_messages(messages, tools, add_in_context_learning_example=False)
                 response = litellm.completion(
                     model=model_name,
@@ -184,6 +277,13 @@ def auto_search_process(result_queue,
         except litellm.BadRequestError as e:
             # If there's an error, send the error info back to the parent process
             result_queue.put({'error': str(e), 'type': 'BadRequestError'})
+            return
+        except Exception as e:
+            # Handle Bedrock or other errors
+            if "Bedrock" in str(e):
+                result_queue.put({'error': str(e), 'type': 'BedrockError'})
+            else:
+                result_queue.put({'error': str(e), 'type': 'GeneralError'})
             return
         
         if last_message and response.choices[0].message.content == last_message:
@@ -390,8 +490,11 @@ def run_localize(rank, args, bug_queue, log_queue, output_file_lock, traj_file_l
                     
                     # loc_result, messages, traj_data = result_queue.get()
                     result = result_queue.get()
-                    if isinstance(result, dict) and 'error' in result and result['type'] == 'BadRequestError':
-                        raise litellm.BadRequestError(result['error'], args.model, args.model.split('/')[0])
+                    if isinstance(result, dict) and 'error' in result:
+                        if result['type'] == 'BadRequestError':
+                            raise litellm.BadRequestError(result['error'], args.model, args.model.split('/')[0])
+                        elif result['type'] in ['BedrockError', 'GeneralError']:
+                            raise Exception(result['error'])
                         # print(f"Error occurred in subprocess: {result['error']}")
                     else:
                         loc_result, messages, traj_data = result
@@ -483,12 +586,17 @@ def run_localize(rank, args, bug_queue, log_queue, output_file_lock, traj_file_l
 
 
 def localize(args):
-    bench_data = load_dataset(args.dataset, split=args.split)
-    bench_tests = filter_dataset(bench_data, 'instance_id', args.used_list)
-    if args.eval_n_limit:
-        eval_n_limit = min(args.eval_n_limit, len(bench_tests))
-        bench_tests = bench_tests.select(range(0, eval_n_limit))
-        logging.info(f'Limiting evaluation to first {eval_n_limit} instances.')
+    # bench_data = load_dataset(args.dataset, split=args.split)
+    # bench_tests = filter_dataset(bench_data, 'instance_id', args.used_list)
+    # Load bench_tests from pattern_queries_new_format.json
+    json_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pattern_queries_new_format.json')
+    with open(json_file_path, 'r') as f:
+        bench_tests = json.load(f)
+
+    # if args.eval_n_limit:
+    #     eval_n_limit = min(args.eval_n_limit, len(bench_tests))
+    #     bench_tests = bench_tests.select(range(0, eval_n_limit))
+    #     logging.info(f'Limiting evaluation to first {eval_n_limit} instances.')
 
     manager = mp.Manager()
     queue = manager.Queue()
@@ -594,11 +702,13 @@ def main():
     
     parser.add_argument(
         "--model", type=str,
-        default="openai/gpt-4o-2024-05-13",
+        default="apac.anthropic.claude-3-5-sonnet-20241022-v2:0",
         choices=["gpt-4o", 
                  "azure/gpt-4o", "openai/gpt-4o-2024-05-13",
                  "deepseek/deepseek-chat", "deepseek-ai/DeepSeek-R1",
                  "litellm_proxy/claude-3-5-sonnet-20241022", "litellm_proxy/gpt-4o-2024-05-13", "litellm_proxy/o3-mini-2025-01-31",
+                 # AWS Bedrock Claude model
+                 "apac.anthropic.claude-3-5-sonnet-20241022-v2:0",
                  # fine-tuned model
                  "openai/qwen-7B", "openai/qwen-7B-128k", "openai/ft-qwen-7B", "openai/ft-qwen-7B-128k",
                  "openai/qwen-32B", "openai/qwen-32B-128k", "openai/ft-qwen-32B", "openai/ft-qwen-32B-128k",
