@@ -124,11 +124,21 @@ def bedrock_completion(model_id, messages, temperature=1.0, tools=None):
         # Convert LiteLLM tools to Bedrock format
         bedrock_tools = []
         for tool in tools:
-            bedrock_tools.append({
+            tool_def = {
                 'name': tool['function']['name'],
                 'description': tool['function']['description'],
-                'input_schema': tool['function']['parameters']
-            })
+            }
+            # Some tools may not have parameters
+            if 'parameters' in tool['function']:
+                tool_def['input_schema'] = tool['function']['parameters']
+            else:
+                # Provide empty schema if no parameters
+                tool_def['input_schema'] = {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            bedrock_tools.append(tool_def)
         request_body['tools'] = bedrock_tools
     
     # Make the API call
