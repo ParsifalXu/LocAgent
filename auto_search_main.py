@@ -71,22 +71,22 @@ def bedrock_completion(model_id, messages, temperature=1.0, tools=None):
     client = get_bedrock_client(model_id)
     
     # Debug: print model info
-    print(f"Using Bedrock model: {model_id}")
-    print(f"Region: {client.meta.region_name}")
+    # print(f"Using Bedrock model: {model_id}")
+    # print(f"Region: {client.meta.region_name}")
     
     # Try to list available models to debug (optional)
-    try:
-        # Use bedrock client (not bedrock-runtime) to list models
-        bedrock_client = boto3.client('bedrock', region_name=client.meta.region_name)
-        list_response = bedrock_client.list_foundation_models()
-        available_models = [model['modelId'] for model in list_response.get('modelSummaries', [])]
-        claude_models = [m for m in available_models if 'claude' in m.lower()]
-        if claude_models:
-            print(f"Available Claude models in {client.meta.region_name}: {claude_models}")
-        else:
-            print(f"No Claude models found in {client.meta.region_name}")
-    except Exception as e:
-        print(f"Could not list models: {e}")
+    # try:
+    #     # Use bedrock client (not bedrock-runtime) to list models
+    #     bedrock_client = boto3.client('bedrock', region_name=client.meta.region_name)
+    #     list_response = bedrock_client.list_foundation_models()
+    #     available_models = [model['modelId'] for model in list_response.get('modelSummaries', [])]
+    #     claude_models = [m for m in available_models if 'claude' in m.lower()]
+    #     if claude_models:
+    #         print(f"Available Claude models in {client.meta.region_name}: {claude_models}")
+    #     else:
+    #         print(f"No Claude models found in {client.meta.region_name}")
+    # except Exception as e:
+    #     print(f"Could not list models: {e}")
     
     # Convert messages to Bedrock format
     bedrock_messages = []
