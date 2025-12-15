@@ -36,6 +36,8 @@ from plugins.location_tools.repo_ops.repo_ops import (
 import litellm
 from litellm import Message as LiteLLMMessage
 from openai import APITimeoutError
+import boto3
+import json as json_module
 from evaluation.eval_metric import filtered_instances
 
 
@@ -49,6 +51,140 @@ from util.runtime.fn_call_converter import (
 )
 # litellm.set_verbose=True
 # os.environ['LITELLM_LOG'] = 'DEBUG
+
+
+def get_bedrock_client():
+    """Initialize AWS Bedrock client"""
+    return boto3.client('bedrock-runtime', region_name='us-east-1')
+
+
+def bedrock_completion(model_id, messages, temperature=1.0, tools=None):
+    """
+    Call AWS Bedrock Claude API
+    """
+    client = get_bedrock_client()
+    
+    # Convert messages to Bedrock format
+    bedrock_messages = []
+    system_message = ""
+    
+    for msg in messages:
+        if msg['role'] == 'system':
+            system_message = msg['content']
+        elif msg['role'] == 'user':
+            bedrock_messages.append({
+                'role': 'user',
+                'content': [{'type': 'text', 'text': msg['content']}]
+            })
+        elif msg['role'] == 'assistant':
+            content = []
+            if msg.get('content'):
+                content.append({'type': 'text', 'text': msg['content']})
+            if msg.get('tool_calls'):
+                for tool_call in msg['tool_calls']:
+                    content.append({
+                        'type': 'tool_use',
+                        'id': tool_call['id'],
+                        'name': tool_call['function']['name'],
+                        'input': json_module.loads(tool_call['function']['arguments'])
+                    })
+            bedrock_messages.append({
+                'role': 'assistant',
+                'content': content
+            })
+        elif msg['role'] == 'tool':
+            # Find the last assistant message and add tool result
+            for i in range(len(bedrock_messages) - 1, -1, -1):
+                if bedrock_messages[i]['role'] == 'assistant':
+                    # Add tool result to user message
+                    bedrock_messages.append({
+                        'role': 'user',
+                        'content': [
+                            {
+                                'type': 'tool_result',
+                                'tool_use_id': msg['tool_call_id'],
+                                'content': [{'type': 'text', 'text': msg['content']}]
+                            }
+                        ]
+                    })
+                    break
+    
+    # Prepare request body
+    request_body = {
+        'anthropic_version': 'bedrock-2023-05-31',
+        'max_tokens': 4096,
+        'temperature': temperature,
+        'messages': bedrock_messages
+    }
+    
+    if system_message:
+        request_body['system'] = system_message
+    
+    if tools:
+        # Convert LiteLLM tools to Bedrock format
+        bedrock_tools = []
+        for tool in tools:
+            bedrock_tools.append({
+                'name': tool['function']['name'],
+                'description': tool['function']['description'],
+                'input_schema': tool['function']['parameters']
+            })
+        request_body['tools'] = bedrock_tools
+    
+    # Make the API call
+    response = client.invoke_model(
+        modelId=model_id,
+        body=json_module.dumps(request_body)
+    )
+    
+    # Parse response
+    response_body = json_module.loads(response['body'].read())
+    
+    # Convert back to LiteLLM format
+    assistant_message = {
+        'role': 'assistant',
+        'content': ''
+    }
+    
+    tool_calls = []
+    for content_block in response_body.get('content', []):
+        if content_block['type'] == 'text':
+            assistant_message['content'] = content_block['text']
+        elif content_block['type'] == 'tool_use':
+            tool_calls.append({
+                'id': content_block['id'],
+                'type': 'function',
+                'function': {
+                    'name': content_block['name'],
+                    'arguments': json_module.dumps(content_block['input'])
+                }
+            })
+    
+    if tool_calls:
+        assistant_message['tool_calls'] = tool_calls
+    
+    # Create mock response in LiteLLM format
+    class MockChoice:
+        def __init__(self, message):
+            self.message = LiteLLMMessage(**message)
+    
+    class MockUsage:
+        def __init__(self, input_tokens, output_tokens):
+            self.prompt_tokens = input_tokens
+            self.completion_tokens = output_tokens
+    
+    class MockResponse:
+        def __init__(self, choice, usage):
+            self.choices = [choice]
+            self.usage = usage
+    
+    mock_choice = MockChoice(assistant_message)
+    mock_usage = MockUsage(
+        response_body['usage']['input_tokens'],
+        response_body['usage']['output_tokens']
+    )
+    
+    return MockResponse(mock_choice, mock_usage)
 
 
 def filter_dataset(dataset, filter_column: str, used_list: str):
@@ -158,7 +294,16 @@ def auto_search_process(result_queue,
 
         try:
             # new conversation
-            if tools and ('hosted_vllm' in model_name or 'qwen' in model_name.lower()):
+            if model_name.startswith('bedrock/'):
+                # Use AWS Bedrock API for Claude models
+                bedrock_model_id = model_name.replace('bedrock/', '')
+                response = bedrock_completion(
+                    model_id=bedrock_model_id,
+                    messages=messages,
+                    temperature=temp,
+                    tools=tools
+                )
+            elif tools and ('hosted_vllm' in model_name or 'qwen' in model_name.lower()):
                 messages = convert_fncall_messages_to_non_fncall_messages(messages, tools, add_in_context_learning_example=False)
                 response = litellm.completion(
                     model=model_name,
@@ -603,6 +748,8 @@ def main():
                  "azure/gpt-4o", "openai/gpt-4o-2024-05-13",
                  "deepseek/deepseek-chat", "deepseek-ai/DeepSeek-R1",
                  "litellm_proxy/claude-3-5-sonnet-20241022", "litellm_proxy/gpt-4o-2024-05-13", "litellm_proxy/o3-mini-2025-01-31",
+                 # AWS Bedrock Claude models
+                 "bedrock/apac.anthropic.claude-3-5-sonnet-20241022-v2:0",
                  # fine-tuned model
                  "openai/qwen-7B", "openai/qwen-7B-128k", "openai/ft-qwen-7B", "openai/ft-qwen-7B-128k",
                  "openai/qwen-32B", "openai/qwen-32B-128k", "openai/ft-qwen-32B", "openai/ft-qwen-32B-128k",

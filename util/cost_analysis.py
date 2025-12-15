@@ -31,6 +31,8 @@ MODEL_COST_PER_INPUT = {
     'litellm_proxy/claude-3-5-sonnet-20241022': 0.000003,
     'litellm_proxy/gpt-4o-2024-05-13': 0.000005,
     'litellm_proxy/o3-mini-2025-01-31': 1.1e-06,
+    # AWS Bedrock Claude pricing (per 1K input tokens)
+    'bedrock/apac.anthropic.claude-3-5-sonnet-20241022-v2:0': 0.000003,
     'azure/gpt-4o-mini-ft': 1.65e-07,
     'azure/gpt-4o-mini-1029-ft': 1.65e-07,
     'azure/gpt-4o-mini': 1.65e-07,
@@ -66,6 +68,8 @@ MODEL_COST_PER_OUTPUT = {
     'litellm_proxy/claude-3-5-sonnet-20241022': 0.000015,
     'litellm_proxy/gpt-4o-2024-05-13': 0.000015,
     'litellm_proxy/o3-mini-2025-01-31': 4.4e-06,
+    # AWS Bedrock Claude pricing (per 1K output tokens)
+    'bedrock/apac.anthropic.claude-3-5-sonnet-20241022-v2:0': 0.000015,
     'azure/gpt-4o-mini-ft': 6.6e-07,
     'azure/gpt-4o-mini-1029-ft': 6.6e-07,
     'azure/gpt-4o-mini': 6.6e-07,
@@ -87,6 +91,9 @@ def calc_cost(model_name, input_tokens, output_tokens):
         return 0
     elif 'qwen' in model_name.lower():
         return 0
+    elif model_name.startswith('bedrock/'):
+        # Handle Bedrock models
+        pass  # Fall through to normal calculation
     
     cost = (
         MODEL_COST_PER_INPUT[model_name] * input_tokens
