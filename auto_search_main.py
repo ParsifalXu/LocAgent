@@ -617,7 +617,7 @@ def run_localize(rank, args, bug_queue, log_queue, output_file_lock, traj_file_l
                         'repo': bug['repo'],
                         'base_commit': bug['base_commit'],
                         'problem_statement': bug['problem_statement'],
-                        'patch': bug['patch'],
+                        # 'patch': bug['patch'],
                         # 'gt_file_changes': gt_file_changes
                     }
                 }
@@ -642,7 +642,7 @@ def run_localize(rank, args, bug_queue, log_queue, output_file_lock, traj_file_l
                     'repo': bug['repo'],
                     'base_commit': bug['base_commit'],
                     'problem_statement': bug['problem_statement'],
-                    'patch': bug['patch'],
+                    # 'patch': bug['patch'],
                     # 'gt_file_changes': gt_file_changes
                 }
             }
