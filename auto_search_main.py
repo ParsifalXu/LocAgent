@@ -53,16 +53,40 @@ from util.runtime.fn_call_converter import (
 # os.environ['LITELLM_LOG'] = 'DEBUG
 
 
-def get_bedrock_client():
-    """Initialize AWS Bedrock client"""
-    return boto3.client('bedrock-runtime', region_name='us-east-1')
+def get_bedrock_client(model_id=None):
+    """Initialize AWS Bedrock client with appropriate region"""
+    # Determine region based on model ID
+    if model_id and model_id.startswith('apac.'):
+        region = 'ap-southeast-1'
+    else:
+        region = 'us-east-1'  # Default region
+    
+    return boto3.client('bedrock-runtime', region_name=region)
 
 
 def bedrock_completion(model_id, messages, temperature=1.0, tools=None):
     """
     Call AWS Bedrock Claude API
     """
-    client = get_bedrock_client()
+    client = get_bedrock_client(model_id)
+    
+    # Debug: print model info
+    print(f"Using Bedrock model: {model_id}")
+    print(f"Region: {client.meta.region_name}")
+    
+    # Try to list available models to debug (optional)
+    try:
+        # Use bedrock client (not bedrock-runtime) to list models
+        bedrock_client = boto3.client('bedrock', region_name=client.meta.region_name)
+        list_response = bedrock_client.list_foundation_models()
+        available_models = [model['modelId'] for model in list_response.get('modelSummaries', [])]
+        claude_models = [m for m in available_models if 'claude' in m.lower()]
+        if claude_models:
+            print(f"Available Claude models in {client.meta.region_name}: {claude_models}")
+        else:
+            print(f"No Claude models found in {client.meta.region_name}")
+    except Exception as e:
+        print(f"Could not list models: {e}")
     
     # Convert messages to Bedrock format
     bedrock_messages = []
@@ -759,6 +783,7 @@ def main():
                  "deepseek/deepseek-chat", "deepseek-ai/DeepSeek-R1",
                  "litellm_proxy/claude-3-5-sonnet-20241022", "litellm_proxy/gpt-4o-2024-05-13", "litellm_proxy/o3-mini-2025-01-31",
                  # AWS Bedrock Claude models
+                 "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
                  "bedrock/apac.anthropic.claude-3-5-sonnet-20241022-v2:0",
                  # fine-tuned model
                  "openai/qwen-7B", "openai/qwen-7B-128k", "openai/ft-qwen-7B", "openai/ft-qwen-7B-128k",
