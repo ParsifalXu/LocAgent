@@ -483,12 +483,16 @@ def run_localize(rank, args, bug_queue, log_queue, output_file_lock, traj_file_l
 
 
 def localize(args):
-    bench_data = load_dataset(args.dataset, split=args.split)
-    bench_tests = filter_dataset(bench_data, 'instance_id', args.used_list)
-    if args.eval_n_limit:
-        eval_n_limit = min(args.eval_n_limit, len(bench_tests))
-        bench_tests = bench_tests.select(range(0, eval_n_limit))
-        logging.info(f'Limiting evaluation to first {eval_n_limit} instances.')
+    # bench_data = load_dataset(args.dataset, split=args.split)
+    # bench_tests = filter_dataset(bench_data, 'instance_id', args.used_list)
+    # if args.eval_n_limit:
+    #     eval_n_limit = min(args.eval_n_limit, len(bench_tests))
+    #     bench_tests = bench_tests.select(range(0, eval_n_limit))
+    #     logging.info(f'Limiting evaluation to first {eval_n_limit} instances.')
+
+    json_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pattern_queries_new_format.json')
+    with open(json_file_path, 'r') as f:
+        bench_tests = json.load(f)
 
     manager = mp.Manager()
     queue = manager.Queue()
