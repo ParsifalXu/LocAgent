@@ -67,20 +67,36 @@ def get_bedrock_client():
 
 def bedrock_completion(model_name, messages, temperature=1.0, tools=None):
     """AWS Bedrock completion function compatible with litellm interface"""
-    bedrock_client = get_bedrock_client()
+    try:
+        bedrock_client = get_bedrock_client()
+    except Exception as e:
+        raise Exception(f"Failed to initialize Bedrock client: {e}")
     
     # Convert messages to Claude format
     claude_messages = []
     system_message = ""
     
+    # Add debug logging
+    logging.debug(f"Processing {len(messages) if messages else 0} messages for Bedrock")
+    
     for msg in messages:
+        # Add null check for message
+        if msg is None:
+            continue
+            
+        # Ensure msg is a dictionary
+        if not isinstance(msg, dict):
+            continue
+            
         if msg.get("role") == "system":
             system_message = msg.get("content", "")
         elif msg.get("role") == "user":
-            claude_messages.append({
-                "role": "user",
-                "content": msg["content"]
-            })
+            content = msg.get("content", "")
+            if content:  # Only add non-empty content
+                claude_messages.append({
+                    "role": "user",
+                    "content": content
+                })
         elif msg.get("role") == "assistant":
             # Handle assistant messages with potential tool calls
             if msg.get("tool_calls"):
@@ -91,32 +107,41 @@ def bedrock_completion(model_name, messages, temperature=1.0, tools=None):
                         "type": "text",
                         "text": msg["content"]
                     })
-                for tool_call in msg["tool_calls"]:
-                    content_blocks.append({
-                        "type": "tool_use",
-                        "id": tool_call["id"],
-                        "name": tool_call["function"]["name"],
-                        "input": json.loads(tool_call["function"]["arguments"])
-                    })
+                for tool_call in msg.get("tool_calls", []):
+                    if tool_call and isinstance(tool_call, dict):
+                        content_blocks.append({
+                            "type": "tool_use",
+                            "id": tool_call.get("id", ""),
+                            "name": tool_call.get("function", {}).get("name", ""),
+                            "input": json.loads(tool_call.get("function", {}).get("arguments", "{}"))
+                        })
                 claude_messages.append({
                     "role": "assistant",
                     "content": content_blocks
                 })
             else:
-                claude_messages.append({
-                    "role": "assistant",
-                    "content": msg["content"]
-                })
+                content = msg.get("content", "")
+                if content:  # Only add non-empty content
+                    claude_messages.append({
+                        "role": "assistant",
+                        "content": content
+                    })
         elif msg.get("role") == "tool":
             # Handle tool responses in Claude format
-            claude_messages.append({
-                "role": "user",
-                "content": [{
-                    "type": "tool_result",
-                    "tool_use_id": msg.get("tool_call_id", ""),
-                    "content": msg["content"]
-                }]
-            })
+            content = msg.get("content", "")
+            if content:  # Only add non-empty content
+                claude_messages.append({
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": msg.get("tool_call_id", ""),
+                        "content": content
+                    }]
+                })
+    
+    # Validate that we have at least one message
+    if not claude_messages:
+        raise Exception("No valid messages found after conversion")
     
     # Prepare request body
     request_body = {
