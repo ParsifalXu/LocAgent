@@ -129,16 +129,24 @@ def bedrock_completion(model_name, messages, temperature=1.0, tools=None):
     if system_message:
         request_body["system"] = system_message
     
-    if tools:
-        # Convert OpenAI tools format to Claude format
+    # Temporarily disable tools to test basic functionality
+    # The tools format for Claude on Bedrock seems to be different than expected
+    # Will implement tools support later once basic text generation works
+    if False and tools:  # Disabled for now
+        # Convert OpenAI tools format to Claude Bedrock format
         claude_tools = []
         for tool in tools:
             if tool.get("type") == "function" and "function" in tool:
                 func_def = tool["function"]
+                # Ensure input_schema has required 'type' field
+                parameters = func_def.get("parameters", {})
+                if "type" not in parameters:
+                    parameters["type"] = "object"
+                
                 claude_tool = {
                     "name": func_def["name"],
                     "description": func_def.get("description", ""),
-                    "input_schema": func_def.get("parameters", {})
+                    "input_schema": parameters
                 }
                 claude_tools.append(claude_tool)
         request_body["tools"] = claude_tools
@@ -302,13 +310,16 @@ def auto_search_process(result_queue,
 
         try:
             # new conversation
-            if tools and model_name == "apac.anthropic.claude-3-5-sonnet-20241022-v2:0":
+            if model_name == "apac.anthropic.claude-3-5-sonnet-20241022-v2:0":
                 # Use AWS Bedrock for Claude model
+                # Note: Tools support temporarily disabled - falls back to text mode
+                if tools:
+                    logging.warning("Tools/function calling not yet supported with Bedrock Claude - using text mode")
                 response = bedrock_completion(
                     model_name=model_name,
                     messages=messages,
                     temperature=temp,
-                    tools=tools
+                    tools=None  # Disable tools for now
                 )
             elif tools and ('hosted_vllm' in model_name or 'qwen' in model_name.lower()):
                 messages = convert_fncall_messages_to_non_fncall_messages(messages, tools, add_in_context_learning_example=False)
