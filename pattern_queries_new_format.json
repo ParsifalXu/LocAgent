@@ -9,7 +9,7 @@
             "astropy/cosmology/tests/test_flrw.py:TestFlatwCDM",
             "astropy/cosmology/tests/test_flrw.py:TestFlatw0waCDM"
         ]
-    }
+    },
     {
         "instance_id": "17",
         "repo": "astropy/astropy",
